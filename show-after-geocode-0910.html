@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"
+          integrity="sha512-xodZBNTC5n17Xt2atTPuE1HxjVMSvLVW9ocqUKLsCC5CXdbqCmblAshOMAS6/keqq/sMZMZ19scR4PsZChSR7A=="
+          crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"
+            integrity="sha512-XQoYMqMTK8LvdxXYG3nZ448hOEQiglfqkJs1NOQV44cWnUrBc8PkAOcXy20w0vlaXaVUearIOBhiXZ5V3ynxwA=="
+            crossorigin=""></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.js"></script>
+    <!-- 引入样式 -->
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <!-- 引入组件库 -->
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <script src="https://ajax.aspnetcdn.com/ajax/jQuery/jquery-1.8.0.js">
+    </script>
+    <!--引入 csv 解析库-->
+    <script src="./papaparse.min.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+    <title>Title</title>
+</head>
+<body>
+<div id="app">
+    <!--  <el-input v-model="locationInput" placeholder="please input the name of the location"
+                style="width: 400px"></el-input>
+      <el-button icon="el-icon-search" @click="handleSearch"></el-button>-->
+
+    <input type="file" @change="getFiles($event)"/>
+    <el-button @click="handleGeocode">geocode</el-button>
+    <el-button @click="handleOutput" v-if="outputVisible">output</el-button>
+    <el-button @click="handleShow">show in map</el-button>
+<!--    <el-button @click="handleTest">test</el-button>-->
+    <div v-show="processVisible">
+        {[parsedNum]} / {[totalNum]}
+    </div>
+    <div v-show="mapVisible">
+        <div id="map" class="map"></div>
+    </div>
+</div>
+
+</body>
+<script>
+
+    let vm = new Vue({
+        el: '#app',
+        data: {
+            map: null,
+            mapVisible: false,
+            fileInput: null,
+            processVisible: false,
+            outputVisible: false,
+            parsedData: [],
+            totalNum: 0,
+            parsedNum: 0,
+        },
+        methods: {
+            getQueryText(text){
+                let queryArray = []
+                let input = text
+                //let tmp =  /\$[\s\S]*?\$/g.exec(input)
+                //let tmp =  /%[\s\S]*?%/g.match(input)
+                let largeLocationMatchRes = input.match(/%[\s\S]*?%/g)
+                let smallLocationMatchRes = input.match(/\$[\s\S]*?\$/g)
+                if(smallLocationMatchRes == null && largeLocationMatchRes == null){
+                    return "null"
+                }
+                if(smallLocationMatchRes != null){
+                    //如果存在小地点 $$
+                    smallLocationMatchRes.forEach(element => {
+                        let tmp = element.replace(/\$/g,"")
+                        tmp = tmp.replace(/ /g,"%20")
+                        queryArray.push(tmp)
+                    });
+                }else{
+                    largeLocationMatchRes.forEach(element => {
+                        let tmp = element.replace(/%/g,"")
+                        tmp = tmp.replace(/ /g,"%20")
+                        queryArray.push(tmp)
+                    });
+                }
+                let queryText = queryArray.join("%20")
+                console.log(queryText)
+                return queryText
+            },
+            /*parse the input file*/
+            getFiles(e) {
+                this.fileInput = e.target.files[0];
+                let self = this
+                Papa.parse(this.fileInput, {
+                    complete: function (results) {
+                        for (let i = 1; i < results.data.length - 1; i++) {
+                            let queryText = self.getQueryText(results.data[i][0])
+                            self.parsedData.push({
+                                "mention_text": results.data[i][0],
+                                "query_text" : queryText,
+                                "lat": -1,
+                                "lon": -1,
+                                "valid": 0
+
+                            })
+                        }
+                        self.$notify({
+                            type: "success",
+                            message: "parse done",
+                        })
+                        console.log(self.parsedData)
+                    }
+                })
+            },
+            async handleGeocode() {
+                // let process visible
+                this.totalNum = this.parsedData.length
+                this.processVisible = true
+
+                for (let i = 0; i < this.totalNum; i++) {
+                    let res = await this.query(this.parsedData[i].query_text)
+                    while (res.valid === 2) {
+                        res = await this.query(this.parsedData[i].query_text)
+                    }
+                    this.parsedData[i].lat = res.lat
+                    this.parsedData[i].lon = res.lon
+                    this.parsedData[i].valid = res.valid
+                    this.parsedNum += 1
+                    console.log(this.parsedData[i].mention_text)
+                    console.log(res)
+                }
+                this.$notify({
+                    type: 'success',
+                    message: 'geocode done'
+                })
+                this.outputVisible = true;
+            },
+            query(address) {
+                //let query = address.replace(/ /g, "%20") // the address to query
+                // replace some symbols to form the part of a url
+                let query = address.replace(/\./g, "")
+                query = query.replace(/&/g, "")
+                query = query.replace(/:/g, "")
+                query = query.replace(/;/g, "")
+                query = query.replace(/</g, "")
+
+               console.log(query)
+                let key = 'Ah-r2Ekqur182_bwwc8tJvrXKzM-llqvr0N88KAwosvNEfrkZjV2O71wurPWmLHP' // key to access Bing Maps API
+                let url = 'http://dev.virtualearth.net/REST/v1/Locations/' + query + '?include=queryParse&maxRes=1&key=' + key // query URL
+                return new Promise(function (resolve, reject) {
+                    if (query == null) {
+                        resolve({
+                            "lat": -1,
+                            "lon": -1,
+                            "valid": 0
+                        })
+                    } else {
+                        let xhr = new XMLHttpRequest()
+                        xhr.open("GET", url, true);
+                        let result;
+                        xhr.onload = function () {
+                            //success
+                            result = JSON.parse(xhr.responseText)
+                            if (result.resourceSets[0].estimatedTotal === 1) {
+                                resolve({
+                                    "lat": result.resourceSets[0].resources[0].geocodePoints[0].coordinates[0],
+                                    "lon": result.resourceSets[0].resources[0].geocodePoints[0].coordinates[1],
+                                    "valid": 1
+                                })
+                            } else {
+                                // no result
+                                resolve({
+                                    "lat": -1,
+                                    "lon": -1,
+                                    "valid": 0
+                                })
+                            }
+
+                        }
+                        xhr.onerror = function () {
+                            resolve({
+                                "lat": -1,
+                                "lon": -1,
+                                "valid": 2
+                            })
+                        }
+                        xhr.send();
+                    }
+
+                })
+            },
+            /*show results on the map*/
+            handleShow() {
+                let hasAdded = []
+                for (let i = 0; i < this.totalNum; i++) {
+                    if (this.parsedData[i].valid === 1) {
+                        // if the query result is valid:
+                        if (!hasAdded.includes(this.parsedData[i].mention_text)) {
+                            // if the result has not added yet:
+                            hasAdded.push(this.parsedData[i].mention_text)
+                            // mark on the map
+                            setTimeout(() => {
+                                let mark = new L.marker(
+                                    L.latLng(
+                                        parseFloat(this.parsedData[i].lat),
+                                        parseFloat(this.parsedData[i].lon)
+                                    )
+                                ).addTo(this.map);
+                            }, 100);
+                            /*this.map.setView(L.latLng(
+                                parseFloat(this.parsedData[i].lat),
+                                parseFloat(this.parsedData[i].lon)
+                            ), 8);*/
+                            //L.marker(this.parsedData[i].lat, this.parsedData[i].lon).addTo(this.map);
+
+
+                        }
+                    }
+                }
+                this.mapVisible = true;
+            },
+
+
+            /* output geocoded data to csv */
+            handleOutput() {
+                console.log(this.parsedData)
+                let csv = Papa.unparse(this.parsedData);
+                let csvData = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+                let csvURL = null;
+                if (navigator.msSaveBlob) {
+                    csvURL = navigator.msSaveBlob(csvData, 'download.csv');
+                } else {
+                    csvURL = window.URL.createObjectURL(csvData);
+                }
+                let tempLink = document.createElement('a');
+                tempLink.href = csvURL;
+                tempLink.setAttribute('download', 'download.csv');
+                tempLink.click();
+            },
+            sleep(time) {
+                let startTime = new Date().getTime() + parseInt(time, 10);
+                while (new Date().getTime() < startTime) {
+                }
+            },
+            handleSearch() {
+                let self = this;
+                let query = this.locationInput.replace(/ /g, "+")
+                console.log(query)
+                let url = 'http://nominatim.openstreetmap.org/search?q=' + query + '&format=json';
+                let xhr = new XMLHttpRequest();
+                xhr.open("GET", url, true);
+                let result;
+                xhr.onload = function () {
+                    result = JSON.parse(xhr.responseText);
+                    console.log(result)
+                    if (result.length > 0) {
+                        self.lat = result[0].lat;
+                        self.lon = result[0].lon;
+                        self.display_name = result[0].display_name;
+                        self.type = result[0].type;
+
+
+                        //设置地图
+                        self.map.setView(new L.LatLng(result[0].lat, result[0].lon), 8);
+                        L.marker([result[0].lat, result[0].lon]).addTo(self.map);
+                        self.mapVisible = true;
+                        setTimeout(() => {
+                            self.map.invalidateSize();
+                        }, 100)
+
+                    } else {
+                        self.$notify.error({
+                            message: 'no result!',
+                        })
+                    }
+
+                };
+                xhr.send();
+            },
+            initMap() {
+                let map = L.map("map", {
+                    minZoom: 3,
+                    maxZoom: 14,
+                    center: [39.550339, 116.114129],
+                    zoom: 12,
+                    zoomControl: true,
+                    attributionControl: false,
+                    crs: L.CRS.EPSG3857
+                });
+
+                L.tileLayer(
+                    "https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/{z}/{x}/{y}?access_token=pk.eyJ1IjoiZGFtb25jaGVubG0iLCJhIjoiY2txYTlkb2N0MDZjcTJ1azF2cWwzY2NzdiJ9.AlODK2ThtyQjKfMRc6XwBA"
+                ).addTo(map);
+                this.map = map;　　　　//data上需要挂载
+            },
+        },
+        mounted() {
+            this.initMap();
+        }
+        ,
+        delimiters: ['{[', ']}'],
+    })
+</script>
+<style>
+    #map {
+        width: 100%;
+        height: 800px;
+    }
+</style>
+</html>
